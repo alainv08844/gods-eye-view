@@ -91,6 +91,71 @@
     let map;
     let markersLayer;
 
+    // Static Country Coordinates Centroids Dictionary for Fallback Geolocation
+    const COUNTRY_COORDS = {
+      'US': [37.0902, -95.7129],
+      'DE': [51.1657, 10.4515],
+      'NL': [52.1326, 5.2913],
+      'FR': [46.2276, 2.2137],
+      'GB': [55.3781, -3.4360],
+      'CA': [56.1304, -106.3468],
+      'RU': [61.5240, 105.3188],
+      'CH': [46.8182, 8.2275],
+      'SE': [60.1282, 18.6435],
+      'RO': [45.9432, 24.9668],
+      'PL': [51.9194, 19.1451],
+      'AT': [47.5162, 14.5501],
+      'FI': [61.9241, 25.7482],
+      'NO': [60.4720, 8.4689],
+      'ES': [40.4637, -3.7492],
+      'IT': [41.8719, 12.5674],
+      'UA': [48.3794, 31.1656],
+      'BR': [14.2350, -51.9253],
+      'AU': [25.2744, 133.7751],
+      'JP': [36.2048, 138.2529],
+      'KR': [35.9077, 127.7669],
+      'SG': [1.3521, 103.8198],
+      'IN': [20.5937, 78.9629],
+      'CN': [35.8617, 104.1954],
+      'ZA': [30.5595, 22.9375],
+      'IE': [53.1424, -7.6921],
+      'IS': [64.9631, -19.0208],
+      'CZ': [49.8175, 15.4730],
+      'HU': [47.1625, 19.5033],
+      'BG': [42.7339, 25.4858],
+      'SK': [48.6690, 19.6990],
+      'LT': [55.1694, 23.8813],
+      'LV': [56.8796, 24.6032],
+      'EE': [58.5953, 25.0136],
+      'DK': [56.2639, 9.5018],
+      'PT': [39.3999, -8.2245],
+      'GR': [39.0742, 21.8243],
+      'TR': [38.9637, 35.2433],
+      'IL': [31.0461, 34.8516],
+      'DEFAULT': [20.0, 0.0]
+    };
+
+    function getRelayCoords(relay) {
+      if (typeof relay.latitude === 'number' && typeof relay.longitude === 'number') {
+        return { lat: relay.latitude, lon: relay.longitude, isApprox: false };
+      }
+      const country = relay.country ? relay.country.toUpperCase() : '';
+      const baseCoords = COUNTRY_COORDS[country] || COUNTRY_COORDS['DEFAULT'];
+      const seed = (relay.fingerprint || relay.nickname || Math.random()).toString();
+      let hash = 0;
+      for (let i = 0; i < seed.length; i++) {
+        hash = (hash << 5) - hash + seed.charCodeAt(i);
+        hash |= 0;
+      }
+      const latOffset = ((hash % 100) / 50 - 1) * 1.2;
+      const lonOffset = (((hash >> 3) % 100) / 50 - 1) * 1.2;
+      return {
+        lat: baseCoords[0] + latOffset,
+        lon: baseCoords[1] + lonOffset,
+        isApprox: true
+      };
+    }
+
     // Initialize Leaflet Dark Map
     function initMap() {
       map = L.map('map', {
@@ -100,11 +165,11 @@
       });
 
       // CartoDB Dark Matter tile layer for dark aesthetic
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19
-      }).addTo(map);
+	<!-- Reemplaza la línea del tileLayer de CartoDB en index.html por: -->
+	L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+		maxZoom: 19,
+		attribution: '&copy; OpenStreetMap contributors'
+	}).addTo(map);
 
       markersLayer = L.layerGroup().addTo(map);
     }
@@ -138,8 +203,9 @@
         const running = relay.running;
         const nickname = relay.nickname || 'Unnamed';
         const ip = relay.or_addresses ? relay.or_addresses[0] : (relay.ip || 'N/A');
-        const lat = relay.latitude !== undefined ? relay.latitude.toFixed(4) : 'N/A';
-        const lon = relay.longitude !== undefined ? relay.longitude.toFixed(4) : 'N/A';
+        const coords = getRelayCoords(relay);
+        const lat = coords.lat.toFixed(4);
+        const lon = coords.lon.toFixed(4);
         const country = relay.country ? relay.country.toUpperCase() : '??';
         const flags = (relay.flags || []).map(f => `<span class="bg-gray-700 text-gray-300 text-xs px-2 py-0.5 rounded-full mr-1">${f}</span>`).join('');
         const bandwidth = relay.bandwidth ? Math.round(relay.bandwidth / 1024) : 'N/A';
@@ -153,7 +219,7 @@
             </td>
             <td class="py-3 px-4 font-mono font-medium text-white">${nickname}</td>
             <td class="py-3 px-4 font-mono text-gray-300">${ip}</td>
-            <td class="py-3 px-4 font-mono text-gray-300">${lat !== 'N/A' ? `${lat}, ${lon}` : '<span class="text-gray-500">No coords</span>'}</td>
+            <td class="py-3 px-4 font-mono text-gray-300">${lat}, ${lon} ${coords.isApprox ? '<span class="text-xs text-yellow-500" title="Approximate country coordinates">(approx)</span>' : ''}</td>
             <td class="py-3 px-4">${country}</td>
             <td class="py-3 px-4">${flags || '<span class="text-gray-500">None</span>'}</td>
             <td class="py-3 px-4 text-right font-mono text-gray-300">${bandwidth}</td>
@@ -167,7 +233,8 @@
       markersLayer.clearLayers();
 
       relays.forEach(relay => {
-        if (typeof relay.latitude === 'number' && typeof relay.longitude === 'number') {
+        const coords = getRelayCoords(relay);
+        if (typeof coords.lat === 'number' && typeof coords.lon === 'number') {
           const nickname = relay.nickname || 'Unnamed';
           const ip = relay.or_addresses ? relay.or_addresses[0] : (relay.ip || 'N/A');
           const country = relay.country ? relay.country.toUpperCase() : '??';
@@ -176,11 +243,11 @@
 
           // Custom colored circle marker or default marker
           const markerColor = running ? '#10b981' : '#ef4444';
-          const circleMarker = L.circleMarker([relay.latitude, relay.longitude], {
+          const circleMarker = L.circleMarker([coords.lat, coords.lon], {
             radius: 7,
             fillColor: markerColor,
-            color: '#fff',
-            weight: 1,
+            color: coords.isApprox ? '#f59e0b' : '#fff',
+            weight: coords.isApprox ? 2 : 1,
             opacity: 1,
             fillOpacity: 0.85
           });
@@ -189,8 +256,8 @@
             <div class="p-1">
               <div class="font-bold text-base text-indigo-300">${nickname}</div>
               <div class="text-xs text-gray-300 mt-1"><strong>IP:</strong> ${ip}</div>
-              <div class="text-xs text-gray-300"><strong>Country:</strong> ${country}</div>
-              <div class="text-xs text-gray-300"><strong>Coords:</strong> ${relay.latitude.toFixed(2)}, ${relay.longitude.toFixed(2)}</div>
+              <div class="text-xs text-gray-300"><strong>Country:</strong> ${country} ${coords.isApprox ? '<span class="text-yellow-400">(Approx. Coords)</span>' : ''}</div>
+              <div class="text-xs text-gray-300"><strong>Coords:</strong> ${coords.lat.toFixed(2)}, ${coords.lon.toFixed(2)}</div>
               <div class="text-xs text-gray-300"><strong>Bandwidth:</strong> ${bandwidth} KB/s</div>
               <div class="mt-2">
                 <span class="px-2 py-0.5 rounded text-xs font-semibold ${running ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}">
