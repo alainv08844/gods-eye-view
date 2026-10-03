@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tor Relays Explorer & Map (MVP)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    /* Custom Leaflet Dark Mode Popup Tweaks */
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+      background-color: #1f2937 !important;
+      color: #f3f4f6 !important;
+      border: 1px solid #374151;
+    }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-6">
+  <div class="max-w-7xl mx-auto">
+    <header class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight text-indigo-400">Tor Relays Explorer & Map</h1>
+        <p class="text-sm text-gray-400 mt-1">Live data & geolocation from Onionoo API (Top 50 Relays)</p>
+      </div>
+      <div class="flex items-center gap-4">
+        <input 
+          type="text" 
+          id="searchInput" 
+          placeholder="Filter by nickname, country, IP..." 
+          class="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-indigo-500 w-72"
+        />
+        <button 
+          id="refreshBtn" 
+          class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+        >
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    <div id="stats" class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+      <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow-sm">
+        <div class="text-xs text-gray-400 uppercase font-semibold">Total Loaded</div>
+        <div id="statTotal" class="text-2xl font-bold text-white mt-1">-</div>
+      </div>
+      <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow-sm">
+        <div class="text-xs text-gray-400 uppercase font-semibold">Running Relays</div>
+        <div id="statRunning" class="text-2xl font-bold text-emerald-400 mt-1">-</div>
+      </div>
+      <div class="bg-gray-800 p-4 rounded-xl border border-gray-700 shadow-sm">
+        <div class="text-xs text-gray-400 uppercase font-semibold">Exit Relays</div>
+        <div id="statExits" class="text-2xl font-bold text-sky-400 mt-1">-</div>
+      </div>
+    </div>
+
+    <!-- Interactive Dark Map -->
+    <div class="mb-6 bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-xl">
+      <div id="map" class="w-full h-[450px] z-10"></div>
+    </div>
+
+    <!-- Relays Table -->
+    <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow-xl">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse">
+          <thead>
+            <tr class="bg-gray-750 border-b border-gray-700 text-xs text-gray-400 uppercase tracking-wider">
+              <th class="py-3 px-4">Status</th>
+              <th class="py-3 px-4">Nickname</th>
+              <th class="py-3 px-4">IP Address</th>
+              <th class="py-3 px-4">Location (Lat, Lon)</th>
+              <th class="py-3 px-4">Country</th>
+              <th class="py-3 px-4">Flags</th>
+              <th class="py-3 px-4 text-right">Bandwidth (KB/s)</th>
+            </tr>
+          </thead>
+          <tbody id="relaysTableBody" class="divide-y divide-gray-700 text-sm">
+            <tr>
+              <td colspan="7" class="py-8 text-center text-gray-400">Loading relays...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    let allRelays = [];
+    let map;
+    let markersLayer;
+
+    // Initialize Leaflet Dark Map
+    function initMap() {
+      map = L.map('map', {
+        center: [20, 0],
+        zoom: 2,
+        zoomControl: true
+      });
+
+      // CartoDB Dark Matter tile layer for dark aesthetic
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+      }).addTo(map);
+
+      markersLayer = L.layerGroup().addTo(map);
+    }
+
+    async function fetchRelays() {
+      const tbody = document.getElementById('relaysTableBody');
+      tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-gray-400">Loading relays from Onionoo...</td></tr>`;
+
+      try {
+        const res = await fetch('/api/relays');
+        if (!res.ok) throw new Error('Failed to fetch relays from server');
+        const data = await res.json();
+        allRelays = data.relays || [];
+        renderRelays(allRelays);
+        updateMap(allRelays);
+        updateStats(allRelays);
+      } catch (err) {
+        console.error(err);
+        tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-red-400">Error loading relays: ${err.message}</td></tr>`;
+      }
+    }
+
+    function renderRelays(relays) {
+      const tbody = document.getElementById('relaysTableBody');
+      if (relays.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-gray-400">No relays found matching your filter.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = relays.map(relay => {
+        const running = relay.running;
+        const nickname = relay.nickname || 'Unnamed';
+        const ip = relay.or_addresses ? relay.or_addresses[0] : (relay.ip || 'N/A');
+        const lat = relay.latitude !== undefined ? relay.latitude.toFixed(4) : 'N/A';
+        const lon = relay.longitude !== undefined ? relay.longitude.toFixed(4) : 'N/A';
+        const country = relay.country ? relay.country.toUpperCase() : '??';
+        const flags = (relay.flags || []).map(f => `<span class="bg-gray-700 text-gray-300 text-xs px-2 py-0.5 rounded-full mr-1">${f}</span>`).join('');
+        const bandwidth = relay.bandwidth ? Math.round(relay.bandwidth / 1024) : 'N/A';
+
+        return `
+          <tr class="hover:bg-gray-750 transition-colors">
+            <td class="py-3 px-4">
+              <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${running ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}">
+                ${running ? 'Running' : 'Offline'}
+              </span>
+            </td>
+            <td class="py-3 px-4 font-mono font-medium text-white">${nickname}</td>
+            <td class="py-3 px-4 font-mono text-gray-300">${ip}</td>
+            <td class="py-3 px-4 font-mono text-gray-300">${lat !== 'N/A' ? `${lat}, ${lon}` : '<span class="text-gray-500">No coords</span>'}</td>
+            <td class="py-3 px-4">${country}</td>
+            <td class="py-3 px-4">${flags || '<span class="text-gray-500">None</span>'}</td>
+            <td class="py-3 px-4 text-right font-mono text-gray-300">${bandwidth}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function updateMap(relays) {
+      if (!markersLayer) return;
+      markersLayer.clearLayers();
+
+      relays.forEach(relay => {
+        if (typeof relay.latitude === 'number' && typeof relay.longitude === 'number') {
+          const nickname = relay.nickname || 'Unnamed';
+          const ip = relay.or_addresses ? relay.or_addresses[0] : (relay.ip || 'N/A');
+          const country = relay.country ? relay.country.toUpperCase() : '??';
+          const running = relay.running;
+          const bandwidth = relay.bandwidth ? Math.round(relay.bandwidth / 1024) : 'N/A';
+
+          // Custom colored circle marker or default marker
+          const markerColor = running ? '#10b981' : '#ef4444';
+          const circleMarker = L.circleMarker([relay.latitude, relay.longitude], {
+            radius: 7,
+            fillColor: markerColor,
+            color: '#fff',
+            weight: 1,
+            opacity: 1,
+            fillOpacity: 0.85
+          });
+
+          const popupContent = `
+            <div class="p-1">
+              <div class="font-bold text-base text-indigo-300">${nickname}</div>
+              <div class="text-xs text-gray-300 mt-1"><strong>IP:</strong> ${ip}</div>
+              <div class="text-xs text-gray-300"><strong>Country:</strong> ${country}</div>
+              <div class="text-xs text-gray-300"><strong>Coords:</strong> ${relay.latitude.toFixed(2)}, ${relay.longitude.toFixed(2)}</div>
+              <div class="text-xs text-gray-300"><strong>Bandwidth:</strong> ${bandwidth} KB/s</div>
+              <div class="mt-2">
+                <span class="px-2 py-0.5 rounded text-xs font-semibold ${running ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}">
+                  ${running ? 'Running' : 'Offline'}
+                </span>
+              </div>
+            </div>
+          `;
+
+          circleMarker.bindPopup(popupContent);
+          markersLayer.addLayer(circleMarker);
+        }
+      });
+    }
+
+    function updateStats(relays) {
+      const total = relays.length;
+      const running = relays.filter(r => r.running).length;
+      const exits = relays.filter(r => r.flags && r.flags.includes('Exit')).length;
+
+      document.getElementById('statTotal').textContent = total;
+      document.getElementById('statRunning').textContent = running;
+      document.getElementById('statExits').textContent = exits;
+    }
+
+    document.getElementById('searchInput').addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase();
+      const filtered = allRelays.filter(r => {
+        const nick = (r.nickname || '').toLowerCase();
+        const country = (r.country || '').toLowerCase();
+        const ip = (r.or_addresses ? r.or_addresses.join(' ') : (r.ip || '')).toLowerCase();
+        return nick.includes(query) || country.includes(query) || ip.includes(query);
+      });
+      renderRelays(filtered);
+      updateMap(filtered);
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', fetchRelays);
+
+    // Initialize map on DOM load
+    document.addEventListener('DOMContentLoaded', () => {
+      initMap();
+      fetchRelays();
+    });
+  </script>
+</body>
+</html>
